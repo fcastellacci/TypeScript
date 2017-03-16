@@ -2513,6 +2513,7 @@ namespace ts {
         /* @internal */ getIdentifierCount(): number;
         /* @internal */ getSymbolCount(): number;
         /* @internal */ getTypeCount(): number;
+        /* @internal */ resolveName(name: string, location: Node, meaning: SymbolFlags): Symbol;
     }
 
     export interface SymbolDisplayBuilder {

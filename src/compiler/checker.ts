@@ -187,7 +187,10 @@ namespace ts {
                 // since we are only interested in declarations of the module itself
                 return tryFindAmbientModule(moduleName, /*withAugmentations*/ false);
             },
-            getApparentType
+            getApparentType,
+            resolveName(name, location, meaning) {
+                return resolveName(location, name, meaning, /*nameNotFoundMessage*/ undefined, /*nameArg*/ undefined);
+            }
         };
 
         const tupleTypes: GenericType[] = [];
