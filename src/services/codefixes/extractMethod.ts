@@ -178,7 +178,7 @@ namespace ts.codefix.extractMethod {
     export function collectEnclosingScopes(range: RangeToExtract) {
         // 2. collect enclosing scopes
         const scopes: Scope[] = [];
-        let current: Node = isArray(range) ? firstOrUndefined(range) : range;
+        let current: Node = isArray(range.range) ? firstOrUndefined(range.range) : range.range;
         while (current) {
             if (isFunctionLike(current) || isSourceFile(current) || isModuleBlock(current)) {
                 scopes.push(current);
@@ -262,7 +262,7 @@ namespace ts.codefix.extractMethod {
         }
 
         // insert function at the end of the scope
-        changeTracker.insertNodeBefore(context.sourceFile, scope.getLastToken(), newFunction, { suffix: context.newLineCharacter });
+        changeTracker.insertNodeBefore(context.sourceFile, scope.getLastToken(), newFunction, { prefix: context.newLineCharacter, suffix: context.newLineCharacter });
 
         const newNodes: Node[] = [];
         // replace range with function call
@@ -304,7 +304,9 @@ namespace ts.codefix.extractMethod {
                 newNodes.push(call);
             }
         }
-        const firstNode = (isArray(range.range) ? range.range[0] : range.range);
+        changeTracker.deleteNodeRange(context.sourceFile, isArray(range.range) ? range.range[0] : range.range, isArray(range.range) ? lastOrUndefined(range.range) : range.range);
+
+        const firstNode = isArray(range.range) ? range.range[0] : range.range;
         // TODO: fix when there are no previous token (beginning of the file)
         const previousToken = findPrecedingToken(firstNode.pos, context.sourceFile);
         for (const newNode of newNodes) {
@@ -321,9 +323,9 @@ namespace ts.codefix.extractMethod {
             }
             // TODO: generate unique property name
             const returnValueProperty = "__return";
-            const statements = isBlock(n) ? n.statements : createNodeArray([isStatement(n) ? n : createStatement(<Expression>n)]);
+            const statements = createNodeArray(isBlock(n) ? n.statements.slice(0) : [isStatement(n) ? n : createStatement(<Expression>n)]);
             if (writes) {
-                const body = visitNodes(statements, visitor);
+                let body = visitNodes(statements, visitor);
                 if (body.length && lastOrUndefined(body).kind !== SyntaxKind.ReturnStatement) {
                     // add return at the end to propagate writes back in case if control flow falls out of the function body
                     body.push(createReturn(createObjectLiteral(writesProps.slice(0))))
