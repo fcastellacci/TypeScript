@@ -20,7 +20,9 @@ namespace ts.codefix.extractMethod {
     export function getRangeToExtract(sourceFile: SourceFile, span: TextSpan): RangeToExtract | undefined {
         const start = getParentNodeInSpan(getTokenAtPosition(sourceFile, span.start), sourceFile, span);
         const end = getParentNodeInSpan(findTokenOnLeftOfPosition(sourceFile, textSpanEnd(span)), sourceFile, span);
+
         let facts = RangeFacts.None;
+
         if (!start || !end || start.parent !== end.parent) {
             return undefined;
         }
@@ -50,15 +52,11 @@ namespace ts.codefix.extractMethod {
             if (!checkNode(start)) {
                 return undefined;
             }
-            if (isStatement(start)) {
-                return { range: [start], facts };
-            }
-            else if (isExpression(start)) {
-                return { range: start, facts };
-            }
-            else {
-                return undefined;
-            }
+            return isStatement(start)
+                ? { range: [start], facts }
+                : isExpression(start)
+                    ? { range: start, facts }
+                    : undefined;
         }
 
         function checkNode(n: Node): boolean {
@@ -66,19 +64,20 @@ namespace ts.codefix.extractMethod {
                 None = 0,
                 Break = 1 << 0,
                 Continue = 1 << 1,
-                Return = 1 << 2,
-                Yield = 1 << 3,
-                Await = 1 << 4
+                Return = 1 << 2
             }
 
             let canExtract = true;
-            let permittedJumps = PermittedJumps.Return | PermittedJumps.Yield | PermittedJumps.Await;
+            let permittedJumps = PermittedJumps.Return;
             let seenLabels: string[];
             visit(n);
             return canExtract;
 
             function visit(n: Node) {
-                if (!canExtract || !n || isFunctionLike(n) || isClassLike(n)) {
+                if (!canExtract) {
+                    return true;
+                }
+                if (!n || isFunctionLike(n) || isClassLike(n)) {
                     return;
                 }
                 const savedPermittedJumps = permittedJumps;
@@ -91,9 +90,13 @@ namespace ts.codefix.extractMethod {
                             }
                             break;
                         case SyntaxKind.TryStatement:
-                            if ((<TryStatement>n.parent).tryBlock === n || (<TryStatement>n.parent).finallyBlock === n) {
-                                // forbid all jumps inside try or finally blocks
+                            if ((<TryStatement>n.parent).tryBlock === n) {
+                                // forbid all jumps inside try blocks
                                 permittedJumps = PermittedJumps.None;
+                            }
+                            else if ((<TryStatement>n.parent).finallyBlock === n) {
+                                // allow unconditional returns from finally blocks
+                                permittedJumps = PermittedJumps.Return;
                             }
                             break;
                         case SyntaxKind.CatchClause:
@@ -134,39 +137,32 @@ namespace ts.codefix.extractMethod {
                             if (label) {
                                 if (!contains(seenLabels, label.text)) {
                                     // attempts to jump to label that is not in range to be extracted
+                                    // TODO: return a description of the problem
                                     canExtract = false;
                                 }
                             }
                             else {
                                 if (!(permittedJumps & (SyntaxKind.BreakStatement ? PermittedJumps.Break : PermittedJumps.Continue))) {
                                     // attempt to break or continue in a forbidden context
+                                    // TODO: return a description of the problem
                                     canExtract = false;
                                 }
                             }
                             break;
                         }
                     case SyntaxKind.AwaitExpression:
-                        if (!(permittedJumps & PermittedJumps.Await)) {
-                            canExtract = false;
-                        }
-                        else {
-                            facts |= RangeFacts.IsAsyncFunction;
-                        }
+                        facts |= RangeFacts.IsAsyncFunction;
                         break;
                     case SyntaxKind.YieldExpression:
-                        if (!(permittedJumps & PermittedJumps.Yield)) {
-                            canExtract = false;
-                        }
-                        else {
-                            facts |= RangeFacts.IsGenerator;
-                        }
+                        facts |= RangeFacts.IsGenerator;
                         break;
                     case SyntaxKind.ReturnStatement:
-                        if (!(permittedJumps & PermittedJumps.Return)) {
-                            canExtract = false;
+                        if (permittedJumps & PermittedJumps.Return) {
+                            facts |= RangeFacts.HasReturn;
                         }
                         else {
-                            facts |= RangeFacts.HasReturn;
+                            // TODO: return a description of the problem
+                            canExtract = false;
                         }
                         break;
                     default:
@@ -203,9 +199,13 @@ namespace ts.codefix.extractMethod {
     export function extractFunctionInScope(node: Node, scope: Scope, usagesInScope: Map<UsageEntry>, range: RangeToExtract, context: CodeFixContext): ExtractResultForScope {
         const changeTracker = textChanges.ChangeTracker.fromCodeFixContext(context);
         // TODO: analyze types of usages and introduce type parameters
-        // TODO: extract/save information if function has unconditional return/throw/etc..
         // TODO: generate unique function name
+
         const functionName = createIdentifier("newFunction");
+        // TODO: derive type parameters from parameter types
+        const typeParameters: TypeParameterDeclaration[] = undefined;
+        // TODO: use real type?
+        const returnType: TypeNode = undefined;
         const parameters: ParameterDeclaration[] = [];
         const callArguments: Identifier[] = [];
         let writes: UsageEntry[];
@@ -224,9 +224,15 @@ namespace ts.codefix.extractMethod {
             }
             callArguments.push(createIdentifier(key));
         });
-        const body = transformFunctionBody(node);
+
+        const writesProps: ObjectLiteralElementLike[] = writes
+            ? writes.map(w => createShorthandPropertyAssignment(w.symbol.name))
+            : undefined;
+
+        const { body, returnValueProperty } = transformFunctionBody(node);
         let newFunction: MethodDeclaration | FunctionDeclaration;
         if (isClassLike(scope)) {
+            // always create private method
             const modifiers: Modifier[] = [createToken(SyntaxKind.PrivateKeyword)];
             if (range.facts & RangeFacts.IsAsyncFunction) {
                 modifiers.push(createToken(SyntaxKind.AsyncKeyword))
@@ -234,64 +240,135 @@ namespace ts.codefix.extractMethod {
             newFunction = createMethod(
                 /*decorators*/ undefined,
                 modifiers,
-                /*asteriskToken*/ undefined, // TODO: put asterisk if extracted method has yield
+                range.facts & RangeFacts.IsGenerator ? createToken(SyntaxKind.AsteriskToken) : undefined,
                 functionName,
-                /*typeParameters*/ undefined, // TODO: derive type parameters from parameter types
+                typeParameters, 
                 parameters,
-                createKeywordTypeNode(SyntaxKind.AnyKeyword), // TODO: use real type
+                returnType,
                 body
             );
         }
         else {
             newFunction = createFunctionDeclaration(
                 /*decorators*/ undefined,
-                /*modifiers*/ undefined,     // TODO: put async if extracted method uses await
-                /*asteriskToken*/ undefined, // TODO: put asterisk if extracted method has yield
+                range.facts & RangeFacts.IsAsyncFunction ? [createToken(SyntaxKind.AsyncKeyword)] : undefined,
+                range.facts & RangeFacts.IsGenerator ? createToken(SyntaxKind.AsteriskToken) : undefined,
                 functionName,
-                /*typeParameters*/ undefined, // TODO: derive type parameters from parameter types
+                typeParameters,
                 parameters,
-                createKeywordTypeNode(SyntaxKind.AnyKeyword), // TODO: use real type
+                returnType,
                 body
             );
         }
 
         // insert function at the end of the scope
         changeTracker.insertNodeBefore(context.sourceFile, scope.getLastToken(), newFunction, { suffix: context.newLineCharacter });
+
+        const newNodes: Node[] = [];
         // replace range with function call
-        let newNode: Expression = createCall(
+        let call: Expression = createCall(
             isClassLike(scope) ? createPropertyAccess(createThis(), functionName) : functionName,
             /*typeArguments*/ undefined,
             callArguments);
+        if (range.facts & RangeFacts.IsGenerator) {
+            call = createYield(createToken(SyntaxKind.AsteriskToken), call);
+        }
+        if (range.facts & RangeFacts.IsAsyncFunction) {
+            call = createAwait(call);
+        }
 
         if (writes) {
+            if (returnValueProperty) {
+                // has both writes and return, need to create variable declaration to hold return value;
+                newNodes.push(createVariableStatement(
+                    /*modifiers*/ undefined,
+                    [createVariableDeclaration(returnValueProperty, createKeywordTypeNode(SyntaxKind.AnyKeyword))]
+                ));
+            }
+            const copy = writesProps.slice(0);
+            copy.push(createShorthandPropertyAssignment(returnValueProperty));
             // propagate writes back
-            newNode = createBinary(createObjectLiteral(
-                writes.map(w => createShorthandPropertyAssignment(w.symbol.name))),
-                SyntaxKind.EqualsToken,
-                newNode);
-        }
-        if (isArray(range.range)) {
-            changeTracker.replaceNodeRange(context.sourceFile, range.range[0], lastOrUndefined(range.range), newNode);
+            newNodes.push(createStatement(createBinary(createObjectLiteral(copy), SyntaxKind.EqualsToken, call)));
+            if (returnValueProperty) {
+                newNodes.push(createReturn(createIdentifier(returnValueProperty)));
+            }
         }
         else {
-            changeTracker.replaceNode(context.sourceFile, range.range, newNode);
+            if (range.facts & RangeFacts.HasReturn) {
+                newNodes.push(createReturn(call));
+            }
+            else if (isArray(range.range)) {
+                newNodes.push(createStatement(call));
+            }
+            else {
+                newNodes.push(call);
+            }
+        }
+        const firstNode = (isArray(range.range) ? range.range[0] : range.range);
+        // TODO: fix when there are no previous token (beginning of the file)
+        const previousToken = findPrecedingToken(firstNode.pos, context.sourceFile);
+        for (const newNode of newNodes) {
+            changeTracker.insertNodeAfter(context.sourceFile, previousToken, newNode, { suffix: context.newLineCharacter });
         }
         return {
             scope,
             changes: changeTracker.getChanges() 
         };
 
-        function transformFunctionBody(n: Node): Block {
+        function transformFunctionBody(n: Node) {
             if (isBlock(n) && !writes) {
-                return n;
+                return { body: n, returnValueProperty: undefined };
             }
-            const statements = isBlock(n) ? n.statements : [isStatement(n) ? n : createStatement(<Expression>n)];
+            // TODO: generate unique property name
+            const returnValueProperty = "__return";
+            const statements = isBlock(n) ? n.statements : createNodeArray([isStatement(n) ? n : createStatement(<Expression>n)]);
             if (writes) {
-                statements.push(createReturn(createObjectLiteral(writes.map(w => createShorthandPropertyAssignment(w.symbol.name)))));
+                const body = visitNodes(statements, visitor);
+                if (body.length && lastOrUndefined(body).kind !== SyntaxKind.ReturnStatement) {
+                    // add return at the end to propagate writes back in case if control flow falls out of the function body
+                    body.push(createReturn(createObjectLiteral(writesProps.slice(0))))
+                }
+                return { body: createBlock(body), returnValueProperty }
             }
-            return createBlock(statements);
+            else {
+                return { body: createBlock(statements), returnValueProperty: undefined }
+            }
+
+            function visitor(n: Node): VisitResult<Node> {
+                if (n.kind === SyntaxKind.ReturnStatement) {
+                    const copy = writesProps.slice(0);
+                    if ((<ReturnStatement>n).expression) {
+                        copy.push(createPropertyAssignment(returnValueProperty, (<ReturnStatement>n).expression));
+                    }
+                    return createReturn(createObjectLiteral(copy));
+                }
+                else {
+                    return visitEachChild(n, visitor, nullTransformationContext)
+                }
+            }
         }
     }
+
+    const nullTransformationContext: TransformationContext = {
+        enableEmitNotification: noop,
+        enableSubstitution: noop,
+        endLexicalEnvironment: () => undefined,
+        getCompilerOptions: notImplemented,
+        getEmitHost: notImplemented,
+        getEmitResolver: notImplemented,
+        hoistFunctionDeclaration: noop,
+        hoistVariableDeclaration: noop,
+        isEmitNotificationEnabled: notImplemented,
+        isSubstitutionEnabled: notImplemented,
+        onEmitNode: noop,
+        onSubstituteNode: notImplemented,
+        readEmitHelpers: notImplemented,
+        requestEmitHelper: noop,
+        resumeLexicalEnvironment: noop,
+        startLexicalEnvironment: noop,
+        suspendLexicalEnvironment: noop
+    };
+
 
     function isModuleBlock(n: Node): n is ModuleBlock {
         return n.kind === SyntaxKind.ModuleBlock;
@@ -375,6 +452,7 @@ namespace ts.codefix.extractMethod {
         }
 
         function recordUsage(n: Identifier, usage: Usage) {
+            // TODO: complain if generator has out flows except yielded values
             var symbol = checker.getSymbolAtLocation(n);
             if (!symbol) {
                 return;

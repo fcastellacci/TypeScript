@@ -76,13 +76,13 @@ namespace ts {
         const expectedRange = t.ranges.get("extracted");
         if (expectedRange) {
             let start: number, end: number;
-            if (ts.isArray(actualRange)) {
-                start = actualRange[0].getStart(f);
-                end = ts.lastOrUndefined(actualRange).getEnd();
+            if (ts.isArray(actualRange.range)) {
+                start = actualRange.range[0].getStart(f);
+                end = ts.lastOrUndefined(actualRange.range).getEnd();
             }
             else {
-                start = actualRange.getStart(f);
-                end = actualRange.getEnd();
+                start = actualRange.range.getStart(f);
+                end = actualRange.range.getEnd();
             }
             assert.equal(start, expectedRange.start, "incorrect start of range");
             assert.equal(end, expectedRange.end, "incorrect end of range");
