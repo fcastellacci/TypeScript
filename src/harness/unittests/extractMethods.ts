@@ -291,8 +291,26 @@ namespace A {
         }
     }
 }`);
+        testExtractMethod("extractMethod5", `
+namespace A {
+    let x = 1;
+    export function foo() {
+    }
+    namespace B {
+        function a() {
+            let a = 1;
+        [#|
+            let y = 5;
+            let z = x;
+            a = y;
+            foo();
+        |]
+        }
+    }
+}`);
     });
 
+    
     function testExtractMethod(caption: string, text: string) {
         it(caption, () => {
             Harness.Baseline.runBaseline(`extractMethod/${caption}.js`, () => {

@@ -399,6 +399,7 @@ namespace ts.codefix.extractMethod {
     interface UsageEntry {
         readonly usage: Usage;
         readonly symbol: Symbol;
+        readonly accessibleName: string;
     }
 
     function collectReadsAndWrites(
@@ -477,8 +478,9 @@ namespace ts.codefix.extractMethod {
             seenUsages.set(symbolId, usage);
             if (lastUsage) {
                 for (const perScope of usagesPerScope) {
-                    if (perScope.has(n.text)) {
-                        perScope.set(n.text, { usage, symbol });
+                    const prevEntry = perScope.get(n.text);
+                    if (prevEntry) {
+                        perScope.set(n.text, { usage, symbol, accessibleName: prevEntry.accessibleName });
                     }
                 }
                 return;
@@ -498,10 +500,25 @@ namespace ts.codefix.extractMethod {
                 if (resolvedSymbol === symbol) {
                     continue;
                 }
+                const accessibleName = getAccessibleName(symbol.exportSymbol || symbol, checker.getSymbolAtLocation(scope));
                 // TODO: check if name can/should be rewritten as dotted name
                 const perScope = usagesPerScope[i] || (usagesPerScope[i] = createMap<UsageEntry>());
-                perScope.set(n.text, { usage, symbol });
+                perScope.set(n.text, { usage, symbol, accessibleName });
             }
+        }
+
+        function getAccessibleName(s: Symbol, scope: Symbol): string {
+            if (!s) {
+                return undefined;
+            }
+            if (s === scope) {
+                return "";
+            }
+            const prefix = getAccessibleName(s.parent, scope);
+            if (prefix === undefined) {
+                return undefined;
+            }
+            return prefix.length === 0 ? s.name : `${prefix}.${s.name}`;
         }
 
         function isUnaryExpressionWithWrite(n: Node): n is PrefixUnaryExpression | PostfixUnaryExpression {
