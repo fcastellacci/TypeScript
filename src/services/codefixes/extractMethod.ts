@@ -4,7 +4,8 @@ namespace ts.codefix.extractMethod {
         None = 0,
         HasReturn = 1 << 0,
         IsGenerator = 1 << 1,
-        IsAsyncFunction = 1 << 2
+        IsAsyncFunction = 1 << 2,
+        UsesThis = 1 << 3
     }
     export interface RangeToExtract {
         range: Expression | Statement[];
@@ -123,6 +124,10 @@ namespace ts.codefix.extractMethod {
                     }
                 }
                 switch (n.kind) {
+                    case SyntaxKind.ThisType:
+                    case SyntaxKind.ThisKeyword:
+                        facts |= RangeFacts.UsesThis;
+                        break;
                     case SyntaxKind.LabeledStatement:
                         {
                             const label = (<LabeledStatement>n).label;
