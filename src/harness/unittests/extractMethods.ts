@@ -229,8 +229,8 @@ namespace ts {
             `);
         });
 
-        testExtractMethod("extractMethod1", `
-namespace A {
+        testExtractMethod("extractMethod1", 
+`namespace A {
     let x = 1;
     function foo() {
     }
@@ -241,13 +241,12 @@ namespace A {
             let y = 5;
             let z = x;
             a = y;
-            foo();
-        |]
+            foo();|]
         }
     }
 }`);
-        testExtractMethod("extractMethod2", `
-namespace A {
+        testExtractMethod("extractMethod2", 
+`namespace A {
     let x = 1;
     function foo() {
     }
@@ -256,13 +255,12 @@ namespace A {
         [#|
             let y = 5;
             let z = x;
-            return foo();
-        |]
+            return foo();|]
         }
     }
 }`);
-        testExtractMethod("extractMethod3", `
-namespace A {
+        testExtractMethod("extractMethod3", 
+`namespace A {
     function foo() {
     }
     namespace B {
@@ -270,13 +268,12 @@ namespace A {
         [#|
             let y = 5;
             yield z;
-            return foo();
-        |]
+            return foo();|]
         }
     }
 }`);
-        testExtractMethod("extractMethod4", `
-namespace A {
+        testExtractMethod("extractMethod4", 
+`namespace A {
     function foo() {
     }
     namespace B {
@@ -286,13 +283,12 @@ namespace A {
             if (z) {
                 await z1;
             }
-            return foo();
-        |]
+            return foo();|]
         }
     }
 }`);
-        testExtractMethod("extractMethod5", `
-namespace A {
+        testExtractMethod("extractMethod5", 
+`namespace A {
     let x = 1;
     export function foo() {
     }
@@ -303,13 +299,12 @@ namespace A {
             let y = 5;
             let z = x;
             a = y;
-            foo();
-        |]
+            foo();|]
         }
     }
 }`);
-        testExtractMethod("extractMethod6", `
-namespace A {
+        testExtractMethod("extractMethod6", 
+`namespace A {
     let x = 1;
     export function foo() {
     }
@@ -320,13 +315,12 @@ namespace A {
             let y = 5;
             let z = x;
             a = y;
-            return foo();
-        |]
+            return foo();|]
         }
     }
 }`);
-        testExtractMethod("extractMethod6", `
-namespace A {
+        testExtractMethod("extractMethod6", 
+`namespace A {
     let x = 1;
     export namespace C {
         export function foo() {
@@ -339,8 +333,7 @@ namespace A {
             let y = 5;
             let z = x;
             a = y;
-            return C.foo();
-        |]
+            return C.foo();|]
         }
     }
 }`);
@@ -377,11 +370,10 @@ namespace A {
                 const actualRange = codefix.extractMethod.getRangeToExtract(sourceFile, createTextSpanFromBounds(selectionRange.start, selectionRange.end));
                 const results = codefix.extractMethod.extractRange(actualRange, sourceFile, context);
                 const data: string[] = [];
-                data.push(`==ORIGINAL==${newLineCharacter}`);
+                data.push(`==ORIGINAL==`);
                 data.push(sourceFile.text)
                 for (const r of results) {
-                    const n = isDeclaration(r.scope) ? r.scope.name.getText() : "scope..."
-                    data.push(`==SCOPE::${n}==${newLineCharacter}`);
+                    data.push(`==SCOPE::${r.scopeDescription}==`);
                     data.push(textChanges.applyChanges(sourceFile.text, r.changes[0].textChanges));
                 }
                 return data.join(newLineCharacter);

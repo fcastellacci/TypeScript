@@ -9,11 +9,12 @@ namespace ts.codefix.extractMethod {
     export interface RangeToExtract {
         range: Expression | Statement[];
         facts: RangeFacts;
-
     }
+
     export type Scope = FunctionLikeDeclaration | SourceFile | ModuleBlock | ClassDeclaration | ClassExpression;
     export interface ExtractResultForScope {
         readonly scope: Scope;
+        readonly scopeDescription: string;
         readonly changes: FileTextChanges[];
     }
 
@@ -318,8 +319,48 @@ namespace ts.codefix.extractMethod {
         }
         return {
             scope,
+            scopeDescription: getDescriptionForScope(scope),
             changes: changeTracker.getChanges()
         };
+
+        function getDescriptionForScope(s: Scope) {
+            if (isFunctionLike(s)) {
+                switch (s.kind) {
+                    case SyntaxKind.Constructor:
+                        return "constructor";
+                    case SyntaxKind.FunctionExpression:
+                        return s.name
+                            ? `function expression ${s.name.getText()}`
+                            : "anonymous function expression";
+                    case SyntaxKind.FunctionDeclaration:
+                        return `function ${s.name.getText()}`;
+                    case SyntaxKind.ArrowFunction:
+                        return "arrow function";
+                    case SyntaxKind.MethodDeclaration:
+                        return `method ${s.name.getText()}`;
+                    case SyntaxKind.GetAccessor:
+                        return `get ${s.name.getText()}`;
+                    case SyntaxKind.SetAccessor:
+                        return `set ${s.name.getText()}`;
+                }
+            }
+            else if (isModuleBlock(s)) {
+                return `namespace ${s.parent.name.getText()}`;
+            }
+            else if (isClassLike(s)) {
+                return s.kind === SyntaxKind.ClassDeclaration
+                    ? `class ${s.name.text}`
+                    : s.name.text
+                        ? `class expression ${s.name.text}`
+                        : "anonymous class expression";
+            }
+            else if (isSourceFile(s)) {
+                return `file '${s.fileName}'`;
+            }
+            else {
+                return "unknown";
+            }
+        }
 
         function transformFunctionBody(n: Node) {
             if (isBlock(n) && !writes) {
