@@ -343,7 +343,7 @@ namespace ts {
     namespace B {
         function a() {
             let a1 = 1;
-            return [#|a1 + x|];
+            return 1 + [#|a1 + x|] + 100;
         }
     }
 }`);

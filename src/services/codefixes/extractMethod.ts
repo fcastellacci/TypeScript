@@ -266,7 +266,6 @@ namespace ts.codefix.extractMethod {
                 body
             );
         }
-
         // insert function at the end of the scope
         changeTracker.insertNodeBefore(context.sourceFile, scope.getLastToken(), newFunction, { prefix: context.newLineCharacter, suffix: context.newLineCharacter });
 
@@ -314,14 +313,7 @@ namespace ts.codefix.extractMethod {
                 newNodes.push(call);
             }
         }
-        changeTracker.deleteNodeRange(context.sourceFile, isArray(range.range) ? range.range[0] : range.range, isArray(range.range) ? lastOrUndefined(range.range) : range.range);
-
-        const firstNode = isArray(range.range) ? range.range[0] : range.range;
-        // TODO: fix when there are no previous token (beginning of the file)
-        const previousToken = findPrecedingToken(firstNode.pos, context.sourceFile);
-        for (const newNode of newNodes) {
-            changeTracker.insertNodeAfter(context.sourceFile, previousToken, newNode, { suffix: context.newLineCharacter });
-        }
+        changeTracker.replaceNodes(context.sourceFile, range.range, newNodes, { nodesSeparator: context.newLineCharacter, suffix: context.newLineCharacter });
         return {
             scope,
             scopeDescription: getDescriptionForScope(scope),
