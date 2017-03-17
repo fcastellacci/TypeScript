@@ -325,6 +325,25 @@ namespace A {
         }
     }
 }`);
+        testExtractMethod("extractMethod6", `
+namespace A {
+    let x = 1;
+    export namespace C {
+        export function foo() {
+        }
+    }
+    namespace B {
+        function a() {
+            let a = 1;
+        [#|
+            let y = 5;
+            let z = x;
+            a = y;
+            return C.foo();
+        |]
+        }
+    }
+}`);
     });
 
     
