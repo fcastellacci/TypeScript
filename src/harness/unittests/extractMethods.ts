@@ -337,6 +337,16 @@ namespace ts {
         }
     }
 }`);
+        testExtractMethod("extractMethod7", 
+`namespace A {
+    let x = 1;
+    namespace B {
+        function a() {
+            let a1 = 1;
+            return [#|a1 + x|];
+        }
+    }
+}`);
     });
 
     
