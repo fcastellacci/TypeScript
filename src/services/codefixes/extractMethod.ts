@@ -10,7 +10,7 @@ namespace ts.codefix.extractMethod {
         range: Expression | Statement[];
         facts: RangeFacts;
 
-    } 
+    }
     export type Scope = FunctionLikeDeclaration | SourceFile | ModuleBlock | ClassDeclaration | ClassExpression;
     export interface ExtractResultForScope {
         readonly scope: Scope;
@@ -196,7 +196,7 @@ namespace ts.codefix.extractMethod {
         return usagesPerScope.map((x, i) => extractFunctionInScope(target, scopes[i], x, range, context))
     }
 
-    export function extractFunctionInScope(node: Node, scope: Scope, usagesInScope: Map<UsageEntry>, range: RangeToExtract, context: CodeFixContext): ExtractResultForScope {
+    export function extractFunctionInScope(node: Node, scope: Scope, { usages: usagesInScope, substitutions }: ScopeUsages, range: RangeToExtract, context: CodeFixContext): ExtractResultForScope {
         const changeTracker = textChanges.ChangeTracker.fromCodeFixContext(context);
         // TODO: analyze types of usages and introduce type parameters
         // TODO: generate unique function name
@@ -217,7 +217,7 @@ namespace ts.codefix.extractMethod {
                 /*name*/ key,
                 /*questionToken*/ undefined,
                 createKeywordTypeNode(SyntaxKind.AnyKeyword), // TODO: use real type
-                );
+            );
             parameters.push(paramDecl);
             if (value.usage === Usage.Write) {
                 (writes || (writes = [])).push(value);
@@ -242,7 +242,7 @@ namespace ts.codefix.extractMethod {
                 modifiers,
                 range.facts & RangeFacts.IsGenerator ? createToken(SyntaxKind.AsteriskToken) : undefined,
                 functionName,
-                typeParameters, 
+                typeParameters,
                 parameters,
                 returnType,
                 body
@@ -318,7 +318,7 @@ namespace ts.codefix.extractMethod {
         }
         return {
             scope,
-            changes: changeTracker.getChanges() 
+            changes: changeTracker.getChanges()
         };
 
         function transformFunctionBody(n: Node) {
@@ -346,12 +346,13 @@ namespace ts.codefix.extractMethod {
                     const copy = writesProps.slice(0);
                     if ((<ReturnStatement>n).expression) {
                         returns = true;
-                        copy.push(createPropertyAssignment(returnValueProperty, (<ReturnStatement>n).expression));
+                        copy.push(createPropertyAssignment(returnValueProperty, visitNode((<ReturnStatement>n).expression, visitor)));
                     }
                     return createReturn(createObjectLiteral(copy));
                 }
                 else {
-                    return visitEachChild(n, visitor, nullTransformationContext)
+                    const rewrite = substitutions.get(getNodeId(n).toString());
+                    return rewrite || visitEachChild(n, visitor, nullTransformationContext);
                 }
             }
         }
@@ -391,7 +392,7 @@ namespace ts.codefix.extractMethod {
 
     const enum Usage {
         // value should be passed to extracted method
-        Read  = 1,
+        Read = 1,
         // value should be passed to extracted method and propagated back
         Write = 2
     }
@@ -399,7 +400,11 @@ namespace ts.codefix.extractMethod {
     interface UsageEntry {
         readonly usage: Usage;
         readonly symbol: Symbol;
-        readonly accessibleName: string;
+    }
+
+    interface ScopeUsages {
+        usages: Map<UsageEntry>;
+        substitutions: Map<Expression>;
     }
 
     function collectReadsAndWrites(
@@ -412,9 +417,12 @@ namespace ts.codefix.extractMethod {
         context.cancellationToken.throwIfCancellationRequested();
         const checker = context.program.getTypeChecker();
 
-        const usagesPerScope: Map<UsageEntry>[] = [];
+        const usagesPerScope: ScopeUsages[] = [];
+        const substitutionsPerScope: Map<Expression>[] = [];
+
         for (let _ of scopes) {
-            usagesPerScope.push(createMap<UsageEntry>());
+            usagesPerScope.push({ usages: createMap<UsageEntry>(), substitutions: createMap<Expression>() });
+            substitutionsPerScope.push(createMap<Expression>());
         }
         const seenUsages = createMap<Usage>();
 
@@ -449,7 +457,7 @@ namespace ts.codefix.extractMethod {
                     return;
                 }
                 if ((isPropertyAccessExpression(n.parent) || isElementAccessExpression(n.parent)) && n !== n.parent.expression) {
-                    return ;
+                    return;
                 }
                 if (isPartOfTypeNode(n)) {
                     // TODO: check if node is accessible in scope and report an error if it is not
@@ -464,35 +472,47 @@ namespace ts.codefix.extractMethod {
         }
 
         function recordUsage(n: Identifier, usage: Usage) {
+            const symbolId = recordUsagebySymbol(n, usage);
+            if (symbolId) {
+                for (let i = 0; i < scopes.length; i++) {
+                    const rename = substitutionsPerScope[i].get(symbolId);
+                    if (rename) {
+                        usagesPerScope[i].substitutions.set(getNodeId(n).toString(), rename)
+                    }
+                }
+            }
+        }
+
+        function recordUsagebySymbol(n: Identifier, usage: Usage) {
             // TODO: complain if generator has out flows except yielded values
             var symbol = checker.getSymbolAtLocation(n);
             if (!symbol) {
-                return;
+                return undefined;
             }
             const symbolId = getSymbolId(symbol).toString();
             const lastUsage = seenUsages.get(symbolId);
             if (lastUsage && lastUsage >= usage) {
-                return;
+                return symbolId;
             }
 
             seenUsages.set(symbolId, usage);
             if (lastUsage) {
                 for (const perScope of usagesPerScope) {
-                    const prevEntry = perScope.get(n.text);
+                    const prevEntry = perScope.usages.get(n.text);
                     if (prevEntry) {
-                        perScope.set(n.text, { usage, symbol, accessibleName: prevEntry.accessibleName });
+                        perScope.usages.set(n.text, { usage, symbol });
                     }
                 }
-                return;
+                return symbolId;
             }
             // find first declaration in this file
             const declInFile = find(symbol.getDeclarations(), d => d.getSourceFile() === sourceFile);
             if (!declInFile) {
-                return;
+                return undefined;
             }
             if (rangeContainsRange(enclosingTextRange, declInFile)) {
                 // declaration is located in range to be extracted - do nothing
-                return;
+                return undefined;
             }
             for (let i = 0; i < scopes.length; i++) {
                 const scope = scopes[i];
@@ -500,25 +520,31 @@ namespace ts.codefix.extractMethod {
                 if (resolvedSymbol === symbol) {
                     continue;
                 }
-                const accessibleName = getAccessibleName(symbol.exportSymbol || symbol, checker.getSymbolAtLocation(scope));
-                // TODO: check if name can/should be rewritten as dotted name
-                const perScope = usagesPerScope[i] || (usagesPerScope[i] = createMap<UsageEntry>());
-                perScope.set(n.text, { usage, symbol, accessibleName });
+                if (!substitutionsPerScope[i].has(symbolId)) {
+                    const propertyAccess = tryReplaceWithPropertyAccess(symbol.exportSymbol || symbol, scope);
+                    if (propertyAccess) {
+                        substitutionsPerScope[i].set(symbolId, propertyAccess);
+                    }
+                    else {
+                        usagesPerScope[i].usages.set(n.text, { usage, symbol });
+                    }
+                }
             }
+            return symbolId;
         }
 
-        function getAccessibleName(s: Symbol, scope: Symbol): string {
+        function tryReplaceWithPropertyAccess(s: Symbol, scopeDecl: Node): Expression {
             if (!s) {
                 return undefined;
             }
-            if (s === scope) {
-                return "";
+            if (s.getDeclarations().some(d => d.parent === scopeDecl)) {
+                return createIdentifier(s.name);
             }
-            const prefix = getAccessibleName(s.parent, scope);
+            const prefix = tryReplaceWithPropertyAccess(s.parent, scopeDecl);
             if (prefix === undefined) {
                 return undefined;
             }
-            return prefix.length === 0 ? s.name : `${prefix}.${s.name}`;
+            return createPropertyAccess(prefix, s.name);
         }
 
         function isUnaryExpressionWithWrite(n: Node): n is PrefixUnaryExpression | PostfixUnaryExpression {
