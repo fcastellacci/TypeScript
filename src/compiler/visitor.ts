@@ -204,12 +204,13 @@ namespace ts {
      * @param visitor The callback used to visit each child.
      * @param context A lexical environment context for the visitor.
      */
-    export function visitEachChild<T extends Node>(node: T | undefined, visitor: Visitor, context: TransformationContext, nodesVisitor?: typeof visitNodes): T | undefined;
+    export function visitEachChild<T extends Node>(node: T | undefined, visitor: Visitor, context: TransformationContext, nodesVisitor?: typeof visitNodes, tokenVisitor?: Visitor): T | undefined;
 
-    export function visitEachChild(node: Node, visitor: Visitor, context: TransformationContext, nodesVisitor = visitNodes): Node {
+    export function visitEachChild(node: Node, visitor: Visitor, context: TransformationContext, nodesVisitor = visitNodes, tokenVisitor?: Visitor): Node {
         if (node === undefined) {
             return undefined;
         }
+        noop
 
         const kind = node.kind;
         // No need to visit nodes with no children.
@@ -397,7 +398,7 @@ namespace ts {
                 return updateBinary(<BinaryExpression>node,
                     visitNode((<BinaryExpression>node).left, visitor, isExpression),
                     visitNode((<BinaryExpression>node).right, visitor, isExpression),
-                    visitNode((<BinaryExpression>node).operatorToken, visitor));
+                    tokenVisitor ? visitNode((<BinaryExpression>node).operatorToken, tokenVisitor) : (<BinaryExpression>node).operatorToken);
 
             case SyntaxKind.PrefixUnaryExpression:
                 return updatePrefix(<PrefixUnaryExpression>node,
@@ -420,7 +421,7 @@ namespace ts {
 
             case SyntaxKind.YieldExpression:
                 return updateYield(<YieldExpression>node,
-                    (<YieldExpression>node).asteriskToken,
+                    tokenVisitor ? visitNode((<YieldExpression>node).asteriskToken, tokenVisitor) : (<YieldExpression>node).asteriskToken,
                     visitNode((<YieldExpression>node).expression, visitor, isExpression));
 
             case SyntaxKind.SpreadElement:
@@ -556,7 +557,7 @@ namespace ts {
                 return updateFunctionDeclaration(<FunctionDeclaration>node,
                     nodesVisitor((<FunctionDeclaration>node).decorators, visitor, isDecorator),
                     nodesVisitor((<FunctionDeclaration>node).modifiers, visitor, isModifier),
-                    (<FunctionDeclaration>node).asteriskToken,
+                    visitNode((<FunctionDeclaration>node).asteriskToken, visitor),
                     visitNode((<FunctionDeclaration>node).name, visitor, isIdentifier),
                     nodesVisitor((<FunctionDeclaration>node).typeParameters, visitor, isTypeParameter),
                     visitParameterList((<FunctionDeclaration>node).parameters, visitor, context, nodesVisitor),

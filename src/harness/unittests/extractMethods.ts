@@ -97,74 +97,35 @@ namespace ts {
         return rulesProvider;
     }
 
-    function testExtractRange(s: string, extractFileName = ""): void {
+    function testExtractRange(s: string): void {
         const t = extractTest(s);
         const f = createSourceFile("a.ts", t.source, ScriptTarget.Latest, /*setParentNodes*/ true);
         const selectionRange = t.ranges.get("selection");
         if (!selectionRange) {
             throw new Error(`Test ${s} does not specify selection range`);
         }
-        if (extractFileName) {
-            debugger
-            const f = {
-                path: "/a.ts",
-                content: t.source
-            };
-            const host = projectSystem.createServerHost([f]);
-            const projectService = projectSystem.createProjectService(host)
-            projectService.openClientFile(f.path);
-            const program = projectService.inferredProjects[0].getLanguageService().getProgram();
-            const sourceFile = program.getSourceFile(f.path);
-            const context: CodeFixContext = {
-                cancellationToken: { throwIfCancellationRequested() { }, isCancellationRequested() { return false; } },
-                errorCode: 0,
-                host: undefined,
-                newLineCharacter,
-                program,
-                sourceFile,
-                span: undefined,
-                rulesProvider: getRuleProvider()
-            }
-            const actualRange = codefix.extractMethod.getRangeToExtract(sourceFile, createTextSpanFromBounds(selectionRange.start, selectionRange.end));
-            const results = codefix.extractMethod.extractRange(actualRange, sourceFile, context);
-            Harness.Baseline.runBaseline(extractFileName + ".js", () => {
-                const data: string[] = [];
-                data.push(`==ORIGINAL==${newLineCharacter}`);
-                data.push(sourceFile.text)
-                for (const r of results) {
-                    const n = isDeclaration(r.scope) ? r.scope.name.getText() : "scope..."
-                    data.push(`==SCOPE::${n}==${newLineCharacter}`);
-                    data.push(textChanges.applyChanges(sourceFile.text, r.changes[0].textChanges));
-                }
-                return data.join(newLineCharacter);
-            })
-            assert(results);
-        }
-        else {
-            const actualRange = codefix.extractMethod.getRangeToExtract(f, createTextSpanFromBounds(selectionRange.start, selectionRange.end));
-            const expectedRange = t.ranges.get("extracted");
-            if (expectedRange) {
-                let start: number, end: number;
-                if (ts.isArray(actualRange.range)) {
-                    start = actualRange.range[0].getStart(f);
-                    end = ts.lastOrUndefined(actualRange.range).getEnd();
-                }
-                else {
-                    start = actualRange.range.getStart(f);
-                    end = actualRange.range.getEnd();
-                }
-                assert.equal(start, expectedRange.start, "incorrect start of range");
-                assert.equal(end, expectedRange.end, "incorrect end of range");
+        const actualRange = codefix.extractMethod.getRangeToExtract(f, createTextSpanFromBounds(selectionRange.start, selectionRange.end));
+        const expectedRange = t.ranges.get("extracted");
+        if (expectedRange) {
+            let start: number, end: number;
+            if (ts.isArray(actualRange.range)) {
+                start = actualRange.range[0].getStart(f);
+                end = ts.lastOrUndefined(actualRange.range).getEnd();
             }
             else {
-                assert.isTrue(!actualRange, `expected range to extract to be undefined`);
+                start = actualRange.range.getStart(f);
+                end = actualRange.range.getEnd();
             }
+            assert.equal(start, expectedRange.start, "incorrect start of range");
+            assert.equal(end, expectedRange.end, "incorrect end of range");
+        }
+        else {
+            assert.isTrue(!actualRange, `expected range to extract to be undefined`);
         }
     }
 
     describe("extractMethods", () => {
         it("get extract range from selection", () => {
-            debugger;
             testExtractRange(`
                 [#|
                 [$|var x = 1;
@@ -266,23 +227,9 @@ namespace ts {
                     }
                 }
             `);
-//             testExtractRange(`
-// namespace A {
-//     let x = 1;
-//     function foo() {
-//     }
-//     namespace B {
-//         function a() {
-//         [#|
-//             let y = 5;
-//             let z = x;
-//             return foo();
-//         |]
-//         }
-//     }
-// }`, "extract1");
-debugger;
-            testExtractRange(`
+        });
+
+        testExtractMethod("extractMethod1", `
 namespace A {
     let x = 1;
     function foo() {
@@ -298,7 +245,93 @@ namespace A {
         |]
         }
     }
-}`, "extract2");
-        });
+}`);
+        testExtractMethod("extractMethod2", `
+namespace A {
+    let x = 1;
+    function foo() {
+    }
+    namespace B {
+        function a() {
+        [#|
+            let y = 5;
+            let z = x;
+            return foo();
+        |]
+        }
+    }
+}`);
+        testExtractMethod("extractMethod3", `
+namespace A {
+    function foo() {
+    }
+    namespace B {
+        function* a(z: number) {
+        [#|
+            let y = 5;
+            yield z;
+            return foo();
+        |]
+        }
+    }
+}`);
+        testExtractMethod("extractMethod4", `
+namespace A {
+    function foo() {
+    }
+    namespace B {
+        async function a(z: number, z1: any) {
+        [#|
+            let y = 5;
+            if (z) {
+                await z1;
+            }
+            return foo();
+        |]
+        }
+    }
+}`);
     });
+
+    function testExtractMethod(caption: string, text: string) {
+        it(caption, () => {
+            Harness.Baseline.runBaseline(`extractMethod/${caption}.js`, () => {
+                const t = extractTest(text);
+                const selectionRange = t.ranges.get("selection");
+                if (!selectionRange) {
+                    throw new Error(`Test ${caption} does not specify selection range`);
+                }
+                const f = {
+                    path: "/a.ts",
+                    content: t.source
+                };
+                const host = projectSystem.createServerHost([f]);
+                const projectService = projectSystem.createProjectService(host)
+                projectService.openClientFile(f.path);
+                const program = projectService.inferredProjects[0].getLanguageService().getProgram();
+                const sourceFile = program.getSourceFile(f.path);
+                const context: CodeFixContext = {
+                    cancellationToken: { throwIfCancellationRequested() { }, isCancellationRequested() { return false; } },
+                    errorCode: 0,
+                    host: undefined,
+                    newLineCharacter,
+                    program,
+                    sourceFile,
+                    span: undefined,
+                    rulesProvider: getRuleProvider()
+                }
+                const actualRange = codefix.extractMethod.getRangeToExtract(sourceFile, createTextSpanFromBounds(selectionRange.start, selectionRange.end));
+                const results = codefix.extractMethod.extractRange(actualRange, sourceFile, context);
+                const data: string[] = [];
+                data.push(`==ORIGINAL==${newLineCharacter}`);
+                data.push(sourceFile.text)
+                for (const r of results) {
+                    const n = isDeclaration(r.scope) ? r.scope.name.getText() : "scope..."
+                    data.push(`==SCOPE::${n}==${newLineCharacter}`);
+                    data.push(textChanges.applyChanges(sourceFile.text, r.changes[0].textChanges));
+                }
+                return data.join(newLineCharacter);
+            });
+        });
+    }
 }

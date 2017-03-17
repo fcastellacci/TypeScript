@@ -285,8 +285,12 @@ namespace ts.codefix.extractMethod {
                     [createVariableDeclaration(returnValueProperty, createKeywordTypeNode(SyntaxKind.AnyKeyword))]
                 ));
             }
-            const copy = writesProps.slice(0);
-            copy.push(createShorthandPropertyAssignment(returnValueProperty));
+
+            let copy = writesProps;
+            if (returnValueProperty) {
+                copy = copy.slice(0);
+                copy.push(createShorthandPropertyAssignment(returnValueProperty));
+            }
             // propagate writes back
             newNodes.push(createStatement(createBinary(createObjectLiteral(copy), SyntaxKind.EqualsToken, call)));
             if (returnValueProperty) {
@@ -321,6 +325,7 @@ namespace ts.codefix.extractMethod {
             if (isBlock(n) && !writes) {
                 return { body: n, returnValueProperty: undefined };
             }
+            let returns = false;
             // TODO: generate unique property name
             const returnValueProperty = "__return";
             const statements = createNodeArray(isBlock(n) ? n.statements.slice(0) : [isStatement(n) ? n : createStatement(<Expression>n)]);
@@ -330,7 +335,7 @@ namespace ts.codefix.extractMethod {
                     // add return at the end to propagate writes back in case if control flow falls out of the function body
                     body.push(createReturn(createObjectLiteral(writesProps.slice(0))))
                 }
-                return { body: createBlock(body), returnValueProperty }
+                return { body: createBlock(body), returnValueProperty: returns ? returnValueProperty : undefined }
             }
             else {
                 return { body: createBlock(statements), returnValueProperty: undefined }
@@ -340,6 +345,7 @@ namespace ts.codefix.extractMethod {
                 if (n.kind === SyntaxKind.ReturnStatement) {
                     const copy = writesProps.slice(0);
                     if ((<ReturnStatement>n).expression) {
+                        returns = true;
                         copy.push(createPropertyAssignment(returnValueProperty, (<ReturnStatement>n).expression));
                     }
                     return createReturn(createObjectLiteral(copy));
@@ -405,7 +411,10 @@ namespace ts.codefix.extractMethod {
         context.cancellationToken.throwIfCancellationRequested();
         const checker = context.program.getTypeChecker();
 
-        const usagesPerScope = Array<Map<UsageEntry>>(scopes.length);
+        const usagesPerScope: Map<UsageEntry>[] = [];
+        for (let _ of scopes) {
+            usagesPerScope.push(createMap<UsageEntry>());
+        }
         const seenUsages = createMap<Usage>();
 
         let valueUsage = Usage.Read;
@@ -483,14 +492,15 @@ namespace ts.codefix.extractMethod {
                 // declaration is located in range to be extracted - do nothing
                 return;
             }
-            const declContainer = getEnclosingBlockScopeContainer(declInFile);
             for (let i = 0; i < scopes.length; i++) {
                 const scope = scopes[i];
-                // in order for declaration to be visible in scope block scope container should match or enclose the scope
-                if (rangeContainsRange(declContainer, scope)) {
-                    const perScope = usagesPerScope[i] || (usagesPerScope[i] = createMap<UsageEntry>());
-                    perScope.set(n.text, { usage, symbol });
+                const resolvedSymbol = checker.resolveName(symbol.name, scope, symbol.flags);
+                if (resolvedSymbol === symbol) {
+                    continue;
                 }
+                // TODO: check if name can/should be rewritten as dotted name
+                const perScope = usagesPerScope[i] || (usagesPerScope[i] = createMap<UsageEntry>());
+                perScope.set(n.text, { usage, symbol });
             }
         }
 
