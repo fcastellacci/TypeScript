@@ -20,13 +20,40 @@ namespace ts.codefix.extractMethod {
     }
 
     export function getRangeToExtract(sourceFile: SourceFile, span: TextSpan): RangeToExtract | undefined {
-        const start = getParentNodeInSpan(getTokenAtPosition(sourceFile, span.start), sourceFile, span);
-        const end = getParentNodeInSpan(findTokenOnLeftOfPosition(sourceFile, textSpanEnd(span)), sourceFile, span);
+        let start = getParentNodeInSpan(getTokenAtPosition(sourceFile, span.start), sourceFile, span);
+        let end = getParentNodeInSpan(findTokenOnLeftOfPosition(sourceFile, textSpanEnd(span)), sourceFile, span);
 
         let facts = RangeFacts.None;
 
-        if (!start || !end || start.parent !== end.parent) {
+        if (!start || !end) {
+            // cannot find either start or end node
             return undefined;
+        }
+        if (start.parent !== end.parent) {
+            // handle cases like 1 + [2 + 3] + 4
+            // user selection is marked with [].
+            // in this case 2 + 3 does not belong to the same tree node
+            // instead the shape of the tree looks like this:
+            //          +
+            //         / \
+            //        +   4
+            //       / \
+            //      +   3
+            //     / \
+            //    1   2
+            // in this case there is no such one node that covers ends of selectioj and is located inside the selection
+            // to handle this we check if both start and end of the selection belong to some binary operation
+            // and start node is parented by the parent of the end node (because binary operators are left associative)
+            // if this is the case - expand the selection to the entire parent of end node (in this case it will be [1 + 2 + 3] + 4)
+            const startParent = skipParentheses(start.parent);
+            const endParent = skipParentheses(end.parent);
+            if (isBinaryExpression(startParent) && isBinaryExpression(endParent) && isNodeDescendantOf(startParent, endParent)) {
+                start = end = endParent;
+            }
+            else {
+                // start and end nodes belong to different subtrees
+                return undefined;
+            }
         }
         if (start !== end) {
             // start and end should be statements and parent should be either block or a source file
@@ -313,7 +340,14 @@ namespace ts.codefix.extractMethod {
                 newNodes.push(call);
             }
         }
-        changeTracker.replaceNodes(context.sourceFile, range.range, newNodes, { nodesSeparator: context.newLineCharacter, suffix: context.newLineCharacter });
+        changeTracker.replaceNodes(
+            context.sourceFile,
+            range.range,
+            newNodes,
+            { 
+                nodesSeparator: context.newLineCharacter,
+                suffix: isArray(range.range) ? context.newLineCharacter : undefined // insert newline only when replacing statements 
+            });
         return {
             scope,
             scopeDescription: getDescriptionForScope(scope),
