@@ -394,16 +394,16 @@ namespace ts.codefix.extractMethod {
         }
 
         function transformFunctionBody(n: Node) {
-            if (isBlock(n) && !writes) {
+            if (isBlock(n) && !writes && substitutions.size === 0) {
                 return { body: n, returnValueProperty: undefined };
             }
             let returns = false;
             // TODO: generate unique property name
             const returnValueProperty = "__return";
             const statements = createNodeArray(isBlock(n) ? n.statements.slice(0) : [isStatement(n) ? n : createStatement(<Expression>n)]);
-            if (writes) {
+            if (writes || substitutions.size) {
                 let body = visitNodes(statements, visitor);
-                if (body.length && lastOrUndefined(body).kind !== SyntaxKind.ReturnStatement) {
+                if (writesProps && body.length && lastOrUndefined(body).kind !== SyntaxKind.ReturnStatement) {
                     // add return at the end to propagate writes back in case if control flow falls out of the function body
                     body.push(createReturn(createObjectLiteral(writesProps.slice(0))))
                 }
@@ -414,7 +414,7 @@ namespace ts.codefix.extractMethod {
             }
 
             function visitor(n: Node): VisitResult<Node> {
-                if (n.kind === SyntaxKind.ReturnStatement) {
+                if (n.kind === SyntaxKind.ReturnStatement && writesProps) {
                     const copy = writesProps.slice(0);
                     if ((<ReturnStatement>n).expression) {
                         returns = true;
@@ -476,7 +476,7 @@ namespace ts.codefix.extractMethod {
 
     interface ScopeUsages {
         usages: Map<UsageEntry>;
-        substitutions: Map<Expression>;
+        substitutions: Map<Node>;
     }
 
     function collectReadsAndWrites(
@@ -490,7 +490,7 @@ namespace ts.codefix.extractMethod {
         const checker = context.program.getTypeChecker();
 
         const usagesPerScope: ScopeUsages[] = [];
-        const substitutionsPerScope: Map<Expression>[] = [];
+        const substitutionsPerScope: Map<Node>[] = [];
 
         for (let _ of scopes) {
             usagesPerScope.push({ usages: createMap<UsageEntry>(), substitutions: createMap<Expression>() });
@@ -531,20 +531,15 @@ namespace ts.codefix.extractMethod {
                 if ((isPropertyAccessExpression(n.parent) || isElementAccessExpression(n.parent)) && n !== n.parent.expression) {
                     return;
                 }
-                if (isPartOfTypeNode(n)) {
-                    // TODO: check if node is accessible in scope and report an error if it is not
-                }
-                else {
-                    recordUsage(n, valueUsage);
-                }
+                recordUsage(n, valueUsage, /*isTypeNode*/ isPartOfTypeNode(n));
             }
             else {
                 forEachChild(n, collectUsages);
             }
         }
 
-        function recordUsage(n: Identifier, usage: Usage) {
-            const symbolId = recordUsagebySymbol(n, usage);
+        function recordUsage(n: Identifier, usage: Usage, isTypeNode: boolean) {
+            const symbolId = recordUsagebySymbol(n, usage, isTypeNode);
             if (symbolId) {
                 for (let i = 0; i < scopes.length; i++) {
                     const rename = substitutionsPerScope[i].get(symbolId);
@@ -555,7 +550,7 @@ namespace ts.codefix.extractMethod {
             }
         }
 
-        function recordUsagebySymbol(n: Identifier, usage: Usage) {
+        function recordUsagebySymbol(n: Identifier, usage: Usage, isTypeName: boolean) {
             // TODO: complain if generator has out flows except yielded values
             var symbol = checker.getSymbolAtLocation(n);
             if (!symbol) {
@@ -593,9 +588,12 @@ namespace ts.codefix.extractMethod {
                     continue;
                 }
                 if (!substitutionsPerScope[i].has(symbolId)) {
-                    const propertyAccess = tryReplaceWithPropertyAccess(symbol.exportSymbol || symbol, scope);
+                    const propertyAccess = tryReplaceWithDottedName(symbol.exportSymbol || symbol, scope, isTypeName);
                     if (propertyAccess) {
                         substitutionsPerScope[i].set(symbolId, propertyAccess);
+                    }
+                    else if (isTypeName) {
+                        // TODO: report error
                     }
                     else {
                         usagesPerScope[i].usages.set(n.text, { usage, symbol });
@@ -605,18 +603,18 @@ namespace ts.codefix.extractMethod {
             return symbolId;
         }
 
-        function tryReplaceWithPropertyAccess(s: Symbol, scopeDecl: Node): Expression {
+        function tryReplaceWithDottedName(s: Symbol, scopeDecl: Node, isTypeNode: boolean): PropertyAccessExpression | EntityName {
             if (!s) {
                 return undefined;
             }
             if (s.getDeclarations().some(d => d.parent === scopeDecl)) {
                 return createIdentifier(s.name);
             }
-            const prefix = tryReplaceWithPropertyAccess(s.parent, scopeDecl);
+            const prefix = tryReplaceWithDottedName(s.parent, scopeDecl, isTypeNode);
             if (prefix === undefined) {
                 return undefined;
             }
-            return createPropertyAccess(prefix, s.name);
+            return isTypeNode ? createQualifiedName(<EntityName>prefix, createIdentifier(s.name)) : createPropertyAccess(<Expression>prefix, s.name);
         }
 
         function isUnaryExpressionWithWrite(n: Node): n is PrefixUnaryExpression | PostfixUnaryExpression {

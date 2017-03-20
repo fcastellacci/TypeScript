@@ -319,7 +319,7 @@ namespace ts {
         }
     }
 }`);
-        testExtractMethod("extractMethod6", 
+        testExtractMethod("extractMethod7", 
 `namespace A {
     let x = 1;
     export namespace C {
@@ -337,13 +337,23 @@ namespace ts {
         }
     }
 }`);
-        testExtractMethod("extractMethod7", 
+        testExtractMethod("extractMethod8", 
 `namespace A {
     let x = 1;
     namespace B {
         function a() {
             let a1 = 1;
             return 1 + [#|a1 + x|] + 100;
+        }
+    }
+}`);
+        testExtractMethod("extractMethod9", 
+`namespace A {
+    export interface I { x: number };
+    namespace B {
+        function a() {
+            [#|let a1: I = { x: 1 };
+            return a1.x + 10;|]
         }
     }
 }`);
