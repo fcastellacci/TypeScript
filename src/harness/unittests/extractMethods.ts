@@ -375,6 +375,45 @@ namespace ts {
         }
     }
 }`);
+        testExtractMethod("extractMethod10", 
+`namespace A {
+    export interface I { x: number };
+    class C {
+        a() {
+            let z = 1;
+            [#|let a1: I = { x: 1 };
+            return a1.x + 10;|]
+        }
+    }
+}`);
+        testExtractMethod("extractMethod11", 
+`namespace A {
+    let y = 1;
+    class C {
+        a() {
+            let z = 1;
+            [#|let a1 = { x: 1 };
+            y = 10;
+            z = 42;
+            return a1.x + 10;|]
+        }
+    }
+}`);
+        testExtractMethod("extractMethod12", 
+`namespace A {
+    let y = 1;
+    class C {
+        b() {}
+        a() {
+            let z = 1;
+            [#|let a1 = { x: 1 };
+            y = 10;
+            z = 42;
+            this.b();
+            return a1.x + 10;|]
+        }
+    }
+}`);
     });
 
     
