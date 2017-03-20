@@ -104,23 +104,23 @@ namespace ts {
         if (!selectionRange) {
             throw new Error(`Test ${s} does not specify selection range`);
         }
-        const actualRange = codefix.extractMethod.getRangeToExtract(f, createTextSpanFromBounds(selectionRange.start, selectionRange.end));
+        const result = codefix.extractMethod.getRangeToExtract(f, createTextSpanFromBounds(selectionRange.start, selectionRange.end));
         const expectedRange = t.ranges.get("extracted");
         if (expectedRange) {
             let start: number, end: number;
-            if (ts.isArray(actualRange.range)) {
-                start = actualRange.range[0].getStart(f);
-                end = ts.lastOrUndefined(actualRange.range).getEnd();
+            if (ts.isArray(result.targetRange.range)) {
+                start = result.targetRange.range[0].getStart(f);
+                end = ts.lastOrUndefined(result.targetRange.range).getEnd();
             }
             else {
-                start = actualRange.range.getStart(f);
-                end = actualRange.range.getEnd();
+                start = result.targetRange.range.getStart(f);
+                end = result.targetRange.range.getEnd();
             }
             assert.equal(start, expectedRange.start, "incorrect start of range");
             assert.equal(end, expectedRange.end, "incorrect end of range");
         }
         else {
-            assert.isTrue(!actualRange, `expected range to extract to be undefined`);
+            assert.isTrue(!result.targetRange, `expected range to extract to be undefined`);
         }
     }
 
@@ -405,8 +405,9 @@ namespace ts {
                     span: undefined,
                     rulesProvider: getRuleProvider()
                 }
-                const actualRange = codefix.extractMethod.getRangeToExtract(sourceFile, createTextSpanFromBounds(selectionRange.start, selectionRange.end));
-                const results = codefix.extractMethod.extractRange(actualRange, sourceFile, context);
+                const result = codefix.extractMethod.getRangeToExtract(sourceFile, createTextSpanFromBounds(selectionRange.start, selectionRange.end));
+                assert.equal(result.errors, undefined, "expect no errors");
+                const results = codefix.extractMethod.extractRange(result.targetRange, sourceFile, context);
                 const data: string[] = [];
                 data.push(`==ORIGINAL==`);
                 data.push(sourceFile.text)

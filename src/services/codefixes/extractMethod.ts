@@ -1,5 +1,23 @@
 /* @internal */
 namespace ts.codefix.extractMethod {
+
+    // TODO: put into diagnostic messages
+    namespace Messages {
+        function toMessage(message: string): DiagnosticMessage {
+            return { message, code: 0, category: DiagnosticCategory.Message, key: message }
+        }
+
+        // TODO provide more information in errors
+        export const CannotExtractFunction: DiagnosticMessage = toMessage("Cannot extract function.");
+        export const StatementOrExpressionExpected: DiagnosticMessage = toMessage("Statement or expression expected.");
+        export const CannotExtractRangeContainingConditionalBreakOrContinueStatements: DiagnosticMessage = toMessage("Cannot extract range containing conditional break or continue statements.");
+        export const CannotExtractRangeContainingConditionalReturnStatement: DiagnosticMessage = toMessage("Cannot extract range containing conditional return statement.");
+        export const CannotExtractRangeContainingLabeledBreakOrContinueStatementWithTargetOutsideOfTheRange: DiagnosticMessage = toMessage("Cannot extract range containing labeled break or continue with target outside of the range.");
+        export const CannotExtractRangeThatContainsWritesToReferencesLocatedOutsideOfTheTargetRangeInGenerators: DiagnosticMessage = toMessage("Cannot extract range containing writes to references located outside of the target range in generators.");
+        export const TypeWillNotBeVisibleInTheNewScope = toMessage("Type will not visible in the new scope.");
+        export const FunctionWillNotBeVisibleInTheNewScope = toMessage("Function will not visible in the new scope.");
+    }
+
     export enum RangeFacts {
         None = 0,
         HasReturn = 1 << 0,
@@ -7,19 +25,41 @@ namespace ts.codefix.extractMethod {
         IsAsyncFunction = 1 << 2,
         UsesThis = 1 << 3
     }
-    export interface RangeToExtract {
-        range: Expression | Statement[];
-        facts: RangeFacts;
+
+    /**
+     * Represents an expression or a list of statements that should be extracted with some extra information
+     */
+    export interface TargetRange {
+        readonly range: Expression | Statement[];
+        readonly facts: RangeFacts;
     }
 
-    export type Scope = FunctionLikeDeclaration | SourceFile | ModuleBlock | ClassDeclaration | ClassExpression;
+    /**
+     * Result of 'getRangeToExtract' operation: contains either a range or a list of errors
+     */
+    export interface RangeToExtract {
+        readonly targetRange?: TargetRange;
+        readonly errors?: Diagnostic[];
+    }
+
+    /*
+     * Scopes that can store newly extracted method
+     */
+    export type Scope = FunctionLikeDeclaration | SourceFile | ModuleBlock | ClassLikeDeclaration;
+
+
+    /**
+     * Result of 'extractRange' operation for a specific scope.
+     * Stores either a list of changes that should be applied to extract a range or a list of errors
+     */
     export interface ExtractResultForScope {
         readonly scope: Scope;
         readonly scopeDescription: string;
-        readonly changes: FileTextChanges[];
+        readonly changes?: FileTextChanges[];
+        readonly errors?: Diagnostic[];
     }
 
-    export function getRangeToExtract(sourceFile: SourceFile, span: TextSpan): RangeToExtract | undefined {
+    export function getRangeToExtract(sourceFile: SourceFile, span: TextSpan): RangeToExtract {
         let start = getParentNodeInSpan(getTokenAtPosition(sourceFile, span.start), sourceFile, span);
         let end = getParentNodeInSpan(findTokenOnLeftOfPosition(sourceFile, textSpanEnd(span)), sourceFile, span);
 
@@ -27,7 +67,7 @@ namespace ts.codefix.extractMethod {
 
         if (!start || !end) {
             // cannot find either start or end node
-            return undefined;
+            return { errors: [createFileDiagnostic(sourceFile, span.start, span.length, Messages.CannotExtractFunction)] };
         }
         if (start.parent !== end.parent) {
             // handle cases like 1 + [2 + 3] + 4
@@ -52,22 +92,20 @@ namespace ts.codefix.extractMethod {
             }
             else {
                 // start and end nodes belong to different subtrees
-                return undefined;
+                return { errors: [createFileDiagnostic(sourceFile, span.start, span.length, Messages.CannotExtractFunction)] };
             }
         }
         if (start !== end) {
             // start and end should be statements and parent should be either block or a source file
             if (!isBlockLike(start.parent)) {
-                return undefined;
-            }
-            if (!(isStatement(start) || isExpression(start)) && !(isStatement(end) || isExpression(end))) {
-                return undefined;
+                return { errors: [createFileDiagnostic(sourceFile, span.start, span.length, Messages.CannotExtractFunction)] };
             }
             const statements: Statement[] = [];
             for (const n of (<BlockLike>start.parent).statements) {
                 if (n === start || statements.length) {
-                    if (!checkNode(n)) {
-                        return undefined;
+                    const errors = checkNode(n);
+                    if (errors) {
+                        return { errors };
                     }
                     statements.push(n);
                 }
@@ -75,39 +113,45 @@ namespace ts.codefix.extractMethod {
                     break;
                 }
             }
-            return { range: statements, facts };
+            return { targetRange: { range: statements, facts } };
         }
         else {
-            if (!checkNode(start)) {
-                return undefined;
+            const errors = checkNode(start);
+            if (errors) {
+                return { errors };
             }
-            return isStatement(start)
-                ? { range: [start], facts }
-                : isExpression(start)
-                    ? { range: start, facts }
-                    : undefined;
+            const range = isStatement(start)
+                ? [start]
+                : <Expression>start;
+            return { targetRange: { range, facts } };
         }
 
-        function checkNode(n: Node): boolean {
+        function checkNode(n: Node): Diagnostic[] {
             const enum PermittedJumps {
                 None = 0,
                 Break = 1 << 0,
                 Continue = 1 << 1,
                 Return = 1 << 2
             }
+            if (!isStatement(n) && !isExpression(n)) {
+                return [createDiagnosticForNode(n, Messages.StatementOrExpressionExpected)];
+            }
 
-            let canExtract = true;
+            let errors: Diagnostic[];
             let permittedJumps = PermittedJumps.Return;
             let seenLabels: string[];
             visit(n);
-            return canExtract;
+
+            return errors;
 
             function visit(n: Node) {
-                if (!canExtract) {
+                if (errors) {
+                    // already found an error - can stop now
                     return true;
                 }
                 if (!n || isFunctionLike(n) || isClassLike(n)) {
-                    return;
+                    // do not dive into functions or classes
+                    return false;
                 }
                 const savedPermittedJumps = permittedJumps;
                 if (n.parent) {
@@ -170,15 +214,13 @@ namespace ts.codefix.extractMethod {
                             if (label) {
                                 if (!contains(seenLabels, label.text)) {
                                     // attempts to jump to label that is not in range to be extracted
-                                    // TODO: return a description of the problem
-                                    canExtract = false;
+                                    (errors || (errors = [])).push(createDiagnosticForNode(n, Messages.CannotExtractRangeContainingLabeledBreakOrContinueStatementWithTargetOutsideOfTheRange));
                                 }
                             }
                             else {
                                 if (!(permittedJumps & (SyntaxKind.BreakStatement ? PermittedJumps.Break : PermittedJumps.Continue))) {
                                     // attempt to break or continue in a forbidden context
-                                    // TODO: return a description of the problem
-                                    canExtract = false;
+                                    (errors || (errors = [])).push(createDiagnosticForNode(n, Messages.CannotExtractRangeContainingConditionalBreakOrContinueStatements));
                                 }
                             }
                             break;
@@ -194,8 +236,7 @@ namespace ts.codefix.extractMethod {
                             facts |= RangeFacts.HasReturn;
                         }
                         else {
-                            // TODO: return a description of the problem
-                            canExtract = false;
+                            (errors || (errors = [])).push(createDiagnosticForNode(n, Messages.CannotExtractRangeContainingConditionalReturnStatement));
                         }
                         break;
                     default:
@@ -208,12 +249,19 @@ namespace ts.codefix.extractMethod {
         }
     }
 
-    export function collectEnclosingScopes(range: RangeToExtract) {
-        // 2. collect enclosing scopes
-        const scopes: Scope[] = [];
+    export function collectEnclosingScopes(range: TargetRange) {
         let current: Node = isArray(range.range) ? firstOrUndefined(range.range) : range.range;
+        // 2. collect enclosing scopes
+        if (range.facts & RangeFacts.UsesThis) {
+            // if range uses this as keyword or as type inside the class then it can only be extracted to a method of the containing class
+            const containingClass = getContainingClass(current);
+            if (containingClass) {
+                return [containingClass];
+            }
+        }
+        const scopes: Scope[] = [];
         while (current) {
-            if (isFunctionLike(current) || isSourceFile(current) || isModuleBlock(current)) {
+            if (isFunctionLike(current) || isSourceFile(current) || isModuleBlock(current) || isClassLike(current)) {
                 scopes.push(current);
             }
             current = current.parent;
@@ -221,15 +269,79 @@ namespace ts.codefix.extractMethod {
         return scopes;
     }
 
-    export function extractRange(range: RangeToExtract, sourceFile: SourceFile, context: CodeFixContext): ExtractResultForScope[] {
-        const scopes = collectEnclosingScopes(range);
-        const enclosingTextRange = getEnclosingTextRange(range, sourceFile);
-        const { target, usagesPerScope } = collectReadsAndWrites(range, scopes, enclosingTextRange, sourceFile, context);
+    export function extractRange(targetRange: TargetRange, sourceFile: SourceFile, context: CodeFixContext): ReadonlyArray<ExtractResultForScope> {
+        const scopes = collectEnclosingScopes(targetRange);
+        if (scopes.length === 0) {
+            return [];
+        }
+        const enclosingTextRange = getEnclosingTextRange(targetRange, sourceFile);
+        const { target, usagesPerScope, errorsPerScope } = collectReadsAndWrites(
+            targetRange,
+            scopes,
+            enclosingTextRange,
+            sourceFile,
+            context.program.getTypeChecker());
+
         context.cancellationToken.throwIfCancellationRequested();
-        return usagesPerScope.map((x, i) => extractFunctionInScope(target, scopes[i], x, range, context))
+        return scopes.map((scope, i) => {
+            const errors = errorsPerScope[0];
+            if (errors.length) {
+                return {
+                    scope,
+                    scopeDescription: getDescriptionForScope(scope),
+                    errors
+                }
+            }
+            return extractFunctionInScope(target, scope, usagesPerScope[i], targetRange, context);
+        });
     }
 
-    export function extractFunctionInScope(node: Node, scope: Scope, { usages: usagesInScope, substitutions }: ScopeUsages, range: RangeToExtract, context: CodeFixContext): ExtractResultForScope {
+    function getDescriptionForScope(s: Scope) {
+        if (isFunctionLike(s)) {
+            switch (s.kind) {
+                case SyntaxKind.Constructor:
+                    return "constructor";
+                case SyntaxKind.FunctionExpression:
+                    return s.name
+                        ? `function expression ${s.name.getText()}`
+                        : "anonymous function expression";
+                case SyntaxKind.FunctionDeclaration:
+                    return `function ${s.name.getText()}`;
+                case SyntaxKind.ArrowFunction:
+                    return "arrow function";
+                case SyntaxKind.MethodDeclaration:
+                    return `method ${s.name.getText()}`;
+                case SyntaxKind.GetAccessor:
+                    return `get ${s.name.getText()}`;
+                case SyntaxKind.SetAccessor:
+                    return `set ${s.name.getText()}`;
+            }
+        }
+        else if (isModuleBlock(s)) {
+            return `namespace ${s.parent.name.getText()}`;
+        }
+        else if (isClassLike(s)) {
+            return s.kind === SyntaxKind.ClassDeclaration
+                ? `class ${s.name.text}`
+                : s.name.text
+                    ? `class expression ${s.name.text}`
+                    : "anonymous class expression";
+        }
+        else if (isSourceFile(s)) {
+            return `file '${s.fileName}'`;
+        }
+        else {
+            return "unknown";
+        }
+    }
+
+    export function extractFunctionInScope(
+        node: Node,
+        scope: Scope,
+        { usages: usagesInScope, substitutions }: ScopeUsages,
+        range: TargetRange,
+        context: CodeFixContext): ExtractResultForScope {
+
         const changeTracker = textChanges.ChangeTracker.fromCodeFixContext(context);
         // TODO: analyze types of usages and introduce type parameters
         // TODO: generate unique function name
@@ -344,7 +456,7 @@ namespace ts.codefix.extractMethod {
             context.sourceFile,
             range.range,
             newNodes,
-            { 
+            {
                 nodesSeparator: context.newLineCharacter,
                 suffix: isArray(range.range) ? context.newLineCharacter : undefined // insert newline only when replacing statements 
             });
@@ -353,45 +465,6 @@ namespace ts.codefix.extractMethod {
             scopeDescription: getDescriptionForScope(scope),
             changes: changeTracker.getChanges()
         };
-
-        function getDescriptionForScope(s: Scope) {
-            if (isFunctionLike(s)) {
-                switch (s.kind) {
-                    case SyntaxKind.Constructor:
-                        return "constructor";
-                    case SyntaxKind.FunctionExpression:
-                        return s.name
-                            ? `function expression ${s.name.getText()}`
-                            : "anonymous function expression";
-                    case SyntaxKind.FunctionDeclaration:
-                        return `function ${s.name.getText()}`;
-                    case SyntaxKind.ArrowFunction:
-                        return "arrow function";
-                    case SyntaxKind.MethodDeclaration:
-                        return `method ${s.name.getText()}`;
-                    case SyntaxKind.GetAccessor:
-                        return `get ${s.name.getText()}`;
-                    case SyntaxKind.SetAccessor:
-                        return `set ${s.name.getText()}`;
-                }
-            }
-            else if (isModuleBlock(s)) {
-                return `namespace ${s.parent.name.getText()}`;
-            }
-            else if (isClassLike(s)) {
-                return s.kind === SyntaxKind.ClassDeclaration
-                    ? `class ${s.name.text}`
-                    : s.name.text
-                        ? `class expression ${s.name.text}`
-                        : "anonymous class expression";
-            }
-            else if (isSourceFile(s)) {
-                return `file '${s.fileName}'`;
-            }
-            else {
-                return "unknown";
-            }
-        }
 
         function transformFunctionBody(n: Node) {
             if (isBlock(n) && !writes && substitutions.size === 0) {
@@ -455,11 +528,14 @@ namespace ts.codefix.extractMethod {
         return n.kind === SyntaxKind.ModuleBlock;
     }
 
-    function getEnclosingTextRange(r: RangeToExtract, sourceFile: SourceFile): TextRange {
-        const range = r.range;
-        return isArray(range)
-            ? { pos: range[0].getStart(sourceFile), end: lastOrUndefined(range).getEnd() }
-            : range;
+    function isReadonlyArray(v: any): v is ReadonlyArray<any> {
+        return isArray(v);
+    }
+
+    function getEnclosingTextRange(targetRange: TargetRange, sourceFile: SourceFile): TextRange {
+        return isReadonlyArray(targetRange.range)
+            ? { pos: targetRange.range[0].getStart(sourceFile), end: targetRange.range[targetRange.range.length - 1].getEnd() }
+            : targetRange.range;
     }
 
     const enum Usage {
@@ -480,35 +556,36 @@ namespace ts.codefix.extractMethod {
     }
 
     function collectReadsAndWrites(
-        range: RangeToExtract,
+        targetRange: TargetRange,
         scopes: Scope[],
         enclosingTextRange: TextRange,
         sourceFile: SourceFile,
-        context: CodeFixContext) {
-
-        context.cancellationToken.throwIfCancellationRequested();
-        const checker = context.program.getTypeChecker();
+        checker: TypeChecker) {
 
         const usagesPerScope: ScopeUsages[] = [];
         const substitutionsPerScope: Map<Node>[] = [];
+        let errorsPerScope: Diagnostic[][] = [];
 
+        // initialize results
         for (let _ of scopes) {
             usagesPerScope.push({ usages: createMap<UsageEntry>(), substitutions: createMap<Expression>() });
             substitutionsPerScope.push(createMap<Expression>());
+            errorsPerScope.push([]);
         }
         const seenUsages = createMap<Usage>();
 
         let valueUsage = Usage.Read;
 
-        const target = isArray(range.range) ? createBlock(range.range) : range.range;
+        const target = isReadonlyArray(targetRange.range) ? createBlock(<Statement[]>targetRange.range) : targetRange.range;
 
         forEachChild(target, collectUsages);
 
-        return { target, usagesPerScope }
+        return { target, usagesPerScope, errorsPerScope }
 
         function collectUsages(n: Node) {
             if (isAssignmentExpression(n)) {
                 const savedValueUsage = valueUsage;
+                // use 'write' as default usage for values
                 valueUsage = Usage.Write;
                 collectUsages(n.left);
                 valueUsage = savedValueUsage;
@@ -542,28 +619,37 @@ namespace ts.codefix.extractMethod {
             const symbolId = recordUsagebySymbol(n, usage, isTypeNode);
             if (symbolId) {
                 for (let i = 0; i < scopes.length; i++) {
-                    const rename = substitutionsPerScope[i].get(symbolId);
-                    if (rename) {
-                        usagesPerScope[i].substitutions.set(getNodeId(n).toString(), rename)
+                    // push substitution from map<symbolId, subst> to map<nodeId, subst> to simplify rewriting
+                    const substitition = substitutionsPerScope[i].get(symbolId);
+                    if (substitition) {
+                        usagesPerScope[i].substitutions.set(getNodeId(n).toString(), substitition)
                     }
                 }
             }
         }
 
         function recordUsagebySymbol(n: Identifier, usage: Usage, isTypeName: boolean) {
-            // TODO: complain if generator has out flows except yielded values
             var symbol = checker.getSymbolAtLocation(n);
             if (!symbol) {
+                // cannot find symbol - do nothing
                 return undefined;
             }
             const symbolId = getSymbolId(symbol).toString();
             const lastUsage = seenUsages.get(symbolId);
+            // there are two kinds of value usages
+            // - reads - if range contains a read from the value located outside of the range then value should be passed as a parameter
+            // - writes - if range contains a write to a value located outside the range the value should be passed as a parameter and 
+            //   returned as a return value
+            // 'write' case is a superset of 'read' so if we already have processed 'write' of some symbol there is not need to handle 'read'
+            // since all information is already recorded 
             if (lastUsage && lastUsage >= usage) {
                 return symbolId;
             }
 
             seenUsages.set(symbolId, usage);
             if (lastUsage) {
+                // if we get here this means that we are trying to handle 'write' and 'read' was already processed
+                // walk scopes and update existing records.
                 for (const perScope of usagesPerScope) {
                     const prevEntry = perScope.usages.get(n.text);
                     if (prevEntry) {
@@ -581,6 +667,13 @@ namespace ts.codefix.extractMethod {
                 // declaration is located in range to be extracted - do nothing
                 return undefined;
             }
+            if (targetRange.facts & RangeFacts.IsGenerator && usage === Usage.Write) {
+                // this is write to a reference located outside of the target scope and range is extracted into generator
+                // currently this is unsupported scenario
+                for (const errors of errorsPerScope) {
+                    errors.push(createDiagnosticForNode(n, Messages.CannotExtractRangeThatContainsWritesToReferencesLocatedOutsideOfTheTargetRangeInGenerators));
+                }
+            }
             for (let i = 0; i < scopes.length; i++) {
                 const scope = scopes[i];
                 const resolvedSymbol = checker.resolveName(symbol.name, scope, symbol.flags);
@@ -588,12 +681,12 @@ namespace ts.codefix.extractMethod {
                     continue;
                 }
                 if (!substitutionsPerScope[i].has(symbolId)) {
-                    const propertyAccess = tryReplaceWithDottedName(symbol.exportSymbol || symbol, scope, isTypeName);
-                    if (propertyAccess) {
-                        substitutionsPerScope[i].set(symbolId, propertyAccess);
+                    const substitution = tryReplaceWithDottedName(symbol.exportSymbol || symbol, scope, isTypeName);
+                    if (substitution) {
+                        substitutionsPerScope[i].set(symbolId, substitution);
                     }
                     else if (isTypeName) {
-                        // TODO: report error
+                        errorsPerScope[i].push(createDiagnosticForNode(n, Messages.TypeWillNotBeVisibleInTheNewScope));
                     }
                     else {
                         usagesPerScope[i].usages.set(n.text, { usage, symbol });
