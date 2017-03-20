@@ -227,6 +227,24 @@ namespace ts {
                     }
                 }
             `);
+            testExtractRange(`
+                function f() {
+                    return [#|  [$|1 + 2|]  |]+ 3;
+                    }
+                }
+            `);
+            testExtractRange(`
+                function f() {
+                    return [$|1 + [#|2 + 3|]|];
+                    }
+                }
+            `);
+            testExtractRange(`
+                function f() {
+                    return [$|1 + 2 + [#|3 + 4|]|];
+                    }
+                }
+            `);
         });
 
         testExtractMethod("extractMethod1", 
