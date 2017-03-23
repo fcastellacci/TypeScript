@@ -521,6 +521,10 @@
         /* @internal */ emitNode?: EmitNode;            // Associated EmitNode (initialized by transforms)
     }
 
+    export interface TypedNode extends Node {
+        type?: TypeNode
+    }
+
     export interface NodeArray<T extends Node> extends Array<T>, TextRange {
         hasTrailingComma?: boolean;
         /* @internal */ transformFlags?: TransformFlags;
@@ -2646,6 +2650,7 @@
     }
 
     /* @internal */
+    //FCASTE: important
     export interface EmitResolver {
         hasGlobalName(name: string): boolean;
         getReferencedExportContainer(node: Identifier, prefixLocals?: boolean): SourceFile | ModuleDeclaration | EnumDeclaration;
@@ -2670,6 +2675,7 @@
         getConstantValue(node: EnumMember | PropertyAccessExpression | ElementAccessExpression): number;
         getReferencedValueDeclaration(reference: Identifier): Declaration;
         getTypeReferenceSerializationKind(typeName: EntityName, location?: Node): TypeReferenceSerializationKind;
+        getTypeAtLocation(node: Node): Type;
         isOptionalParameter(node: ParameterDeclaration): boolean;
         moduleExportsSomeValue(moduleReferenceExpression: Expression): boolean;
         isArgumentsLocalBinding(node: Identifier): boolean;
@@ -4088,6 +4094,7 @@
          * globally defined names that exist outside of the current source file.
          */
         hasGlobalName?(name: string): boolean;
+        getTypeAtLocation?(node: Node): Type;
         /**
          * A hook used by the Printer to provide notifications prior to emitting a node. A
          * compatible implementation **must** invoke `emitCallback` with the provided `hint` and

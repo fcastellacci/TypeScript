@@ -21821,6 +21821,10 @@ namespace ts {
                 getExternalModuleFileFromDeclaration,
                 getTypeReferenceDirectivesForEntityName,
                 getTypeReferenceDirectivesForSymbol,
+                getTypeAtLocation:  node => {
+                    node = getParseTreeNode(node);
+                    return node ? getTypeOfNode(node) : unknownType;
+                },
                 isLiteralConstDeclaration,
                 writeLiteralConstValue,
                 getJsxFactoryEntity: () => _jsxFactoryEntity

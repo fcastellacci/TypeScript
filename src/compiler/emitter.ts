@@ -34,6 +34,7 @@ namespace ts {
         const printer = createPrinter(compilerOptions, {
             // resolver hooks
             hasGlobalName: resolver.hasGlobalName,
+            getTypeAtLocation: resolver.getTypeAtLocation,
 
             // transform hooks
             onEmitNode: transform.emitNodeWithNotification,
@@ -192,6 +193,7 @@ namespace ts {
     export function createPrinter(printerOptions: PrinterOptions = {}, handlers: PrintHandlers = {}): Printer {
         const {
             hasGlobalName,
+            getTypeAtLocation,
             onEmitSourceMapOfNode,
             onEmitSourceMapOfToken,
             onEmitSourceMapOfPosition,
@@ -777,6 +779,7 @@ namespace ts {
 
         function emitIdentifier(node: Identifier) {
             write(getTextOfNode(node, /*includeTrivia*/ false));
+            emitTypeAnnotation(node);
         }
 
         //
@@ -818,9 +821,83 @@ namespace ts {
             emitModifiers(node, node.modifiers);
             writeIfPresent(node.dotDotDotToken, "...");
             emit(node.name);
+            emitTypeAnnotation(node, true);
             writeIfPresent(node.questionToken, "?");
             emitExpressionWithPrefix(" = ", node.initializer);
             emitWithPrefix(": ", node.type);
+        }
+
+        function emitTypeAnnotation(node: Node, emitObjectAnnotation: boolean = false) {
+            let ignoreNode = false;
+            if (node.parent) {
+                switch (node.parent.kind) {
+                    case SyntaxKind.PropertyAccessExpression:
+                        ignoreNode = node.parent.parent && isAssignmentExpression(node.parent.parent) && node.parent.id === node.parent.parent.left.id;
+                        break;
+                    case SyntaxKind.BinaryExpression:
+                        ignoreNode = isAssignmentExpression(node.parent) && node.id === node.parent.left.id;
+                        break;
+                    case SyntaxKind.VariableDeclaration:
+                        ignoreNode = !((<VariableDeclaration>node.parent).initializer && (<VariableDeclaration>node.parent).initializer.id === node.id)
+                        break;
+                    case SyntaxKind.PropertyDeclaration:
+                    case SyntaxKind.EnumDeclaration:
+                        ignoreNode = true;
+                        break;
+                }
+            }
+            let type = getTypeAtLocation(node); 
+            if (emitObjectAnnotation) {
+                if (type.flags === TypeFlags.Object && type.symbol)
+                {
+                    switch (type.symbol.name) {
+                        case "Int":
+                        case "Float":
+                        case "Array":
+                            break;
+                        default:
+                            write("/** @type {obj} */");
+                    } 
+                }
+            } else if (!ignoreNode && type) {
+                let typeAnnotationName = getTypeAnnotationName(type);
+                if (typeAnnotationName) {
+                    write(`/** @type {${typeAnnotationName}} */`);
+                }
+            }
+        }
+
+        function getTypeAnnotationName(type: Type): string | null {
+              switch(type.flags) {
+                    case TypeFlags.Object:
+                        if (type.symbol) {
+                            switch (type.symbol.name) {
+                                case "Int":
+                                case "Float":
+                                    return type.symbol.name.toLowerCase();
+                                case "Array":
+                                    let typeRef = <TypeReference>type;
+                                    if (typeRef.typeArguments && typeRef.typeArguments[0]) {
+                                        let typeArgumentName: string | null = getTypeAnnotationName(typeRef.typeArguments[0]);
+                                        if (typeArgumentName && (typeArgumentName == "int" || typeArgumentName == "float")) {
+                                            return `array<${typeArgumentName}>`;
+                                        }
+                                    }
+                            } 
+                        } 
+                        break;
+                    case TypeFlags.Enum:
+                    case TypeFlags.EnumLiteral:
+                    //case TypeFlags.Number:
+                        return "int";
+                    case TypeFlags.String:
+                    case TypeFlags.StringLiteral:
+                        return "string";
+                    case TypeFlags.Boolean:
+                    case TypeFlags.BooleanLiteral:
+                        return "bool";
+                }
+            return null;
         }
 
         function emitDecorator(decorator: Decorator) {
@@ -1104,12 +1181,12 @@ namespace ts {
 
             emitExpression(node.expression);
             increaseIndentIf(indentBeforeDot);
-
             const shouldEmitDotDot = !indentBeforeDot && needsDotDotForPropertyAccess(node.expression);
             write(shouldEmitDotDot ? ".." : ".");
 
             increaseIndentIf(indentAfterDot);
             emit(node.name);
+            //emitTypeAnnotation(node);
             decreaseIndentIf(indentBeforeDot, indentAfterDot);
         }
 
@@ -1138,6 +1215,7 @@ namespace ts {
             write("[");
             emitExpression(node.argumentExpression);
             write("]");
+            emitTypeAnnotation(node);
         }
 
         function emitCallExpression(node: CallExpression) {
